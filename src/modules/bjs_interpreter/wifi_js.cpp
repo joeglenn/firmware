@@ -142,13 +142,26 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         }
     }
 
-    // options object handling (body, method, responseType, headers)
+    // options object handling (timeout, body, method, responseType, headers)
     const char *bodyRequest = NULL;
     size_t bodyRequestLength = 0U;
     const char *requestType = "GET";
     uint8_t returnResponseType = 0; // 0 = string, 1 = arraybuffer, 2 = json
 
     if (argc > 1 && JS_IsObject(ctx, argv[1])) {
+        // Optional: timeout in ms for connecting and for each wait on the response
+        // (default 5000). Read before the body so no string pointer is held across it.
+        JSValue jsvTimeout = JS_GetPropertyStr(ctx, argv[1], "timeout");
+        if (JS_IsNumber(ctx, jsvTimeout)) {
+            int timeoutMs = 0;
+            JS_ToInt32(ctx, &timeoutMs, jsvTimeout);
+            if (timeoutMs > 0) {
+                if (timeoutMs > 65535) timeoutMs = 65535; // HTTPClient::setTimeout() takes uint16_t
+                http.setConnectTimeout(timeoutMs);
+                http.setTimeout((uint16_t)timeoutMs);
+            }
+        }
+
         JSValue jsvBody = JS_GetPropertyStr(ctx, argv[1], "body");
         if (!JS_IsUndefined(jsvBody)) {
             if (JS_IsString(ctx, jsvBody) || JS_IsNumber(ctx, jsvBody) || JS_IsBool(jsvBody)) {
