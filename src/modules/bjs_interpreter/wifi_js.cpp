@@ -149,16 +149,19 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     uint8_t returnResponseType = 0; // 0 = string, 1 = arraybuffer, 2 = json
 
     if (argc > 1 && JS_IsObject(ctx, argv[1])) {
-        // Optional: timeout in ms for connecting and for each wait on the response
-        // (default 5000). Read before the body so no string pointer is held across it.
+        // Optional: timeout in ms for connecting, for the TLS handshake and for each wait on
+        // the response. Without it the defaults stay as they were (5000 ms; handshake 120 s).
+        // Read before the body so no string pointer is held across it.
         JSValue jsvTimeout = JS_GetPropertyStr(ctx, argv[1], "timeout");
         if (JS_IsNumber(ctx, jsvTimeout)) {
             int timeoutMs = 0;
-            JS_ToInt32(ctx, &timeoutMs, jsvTimeout);
+            JS_ToInt32Sat(ctx, &timeoutMs, jsvTimeout); // saturates instead of wrapping
             if (timeoutMs > 0) {
                 if (timeoutMs > 65535) timeoutMs = 65535; // HTTPClient::setTimeout() takes uint16_t
                 http.setConnectTimeout(timeoutMs);
                 http.setTimeout((uint16_t)timeoutMs);
+                // NetworkClientSecure takes the handshake limit in seconds.
+                if (tlsClient) tlsClient->setHandshakeTimeout((timeoutMs + 999) / 1000);
             }
         }
 
@@ -246,7 +249,9 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
             // e.g. "connection refused (TLS -0x7f00: SSL - Memory allocation failed)"
             char tlsError[96] = {0};
             int tlsCode = tlsClient->lastError(tlsError, sizeof(tlsError));
-            if (tlsCode < 0) {
+            // -1 is the client's own "TCP connect failed / timed out", not an mbedTLS code,
+            // and 0 means TLS was never started (e.g. DNS failure): leave the message alone.
+            if (tlsCode < -1) {
                 error += " (TLS -0x" + String((unsigned int)(-tlsCode), HEX) + ": " + String(tlsError) + ")";
             }
         }
