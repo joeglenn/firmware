@@ -7,7 +7,9 @@
 #include "storage_js.h"
 #include <ArduinoJson.h>
 #include <HTTPClient.h>
+#include <NetworkClientSecure.h>
 #include <WiFi.h>
+#include <memory>
 
 static const char *wifi_enc_types[] = {
     "OPEN",
@@ -98,6 +100,9 @@ JSValue native_wifiDisconnect(JSContext *ctx, JSValue *this_val, int argc, JSVal
 }
 
 JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *argv) {
+    // HTTPS requests run on this client so that a failed connect can report the TLS error.
+    // Declared before `http` so that it outlives it.
+    std::unique_ptr<NetworkClientSecure> tlsClient;
     HTTPClient http;
     http.setReuse(false);
 
@@ -110,7 +115,14 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
         return JS_ThrowTypeError(ctx, "httpFetch(url:string, options?:object|headers?:array)");
 
     const char *url = JS_ToCString(ctx, argv[0], &stringBuffer);
-    http.begin(url);
+    if (url && strncmp(url, "https://", 8) == 0) {
+        // Same behaviour as HTTPClient::begin(url) for https: no certificate verification.
+        tlsClient.reset(new NetworkClientSecure());
+        tlsClient->setInsecure();
+        http.begin(*tlsClient, url);
+    } else {
+        http.begin(url);
+    }
 
     // handle headers if a simple array of pairs was passed as second arg
     if (argc > 1 && JS_GetClassID(ctx, argv[1]) == JS_CLASS_ARRAY) {
@@ -216,7 +228,16 @@ JSValue native_httpFetch(JSContext *ctx, JSValue *this_val, int argc, JSValue *a
     // Content-Length
     int httpResponseCode = http.sendRequest(requestType, (uint8_t *)bodyRequest, bodyRequestLength);
     if (httpResponseCode <= 0) {
-        return JS_ThrowInternalError(ctx, http.errorToString(httpResponseCode).c_str());
+        String error = http.errorToString(httpResponseCode);
+        if (tlsClient) {
+            // e.g. "connection refused (TLS -0x7f00: SSL - Memory allocation failed)"
+            char tlsError[96] = {0};
+            int tlsCode = tlsClient->lastError(tlsError, sizeof(tlsError));
+            if (tlsCode < 0) {
+                error += " (TLS -0x" + String((unsigned int)(-tlsCode), HEX) + ": " + String(tlsError) + ")";
+            }
+        }
+        return JS_ThrowInternalError(ctx, "%s", error.c_str());
     }
 
     WiFiClient *stream = http.getStreamPtr();
