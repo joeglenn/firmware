@@ -5,6 +5,7 @@
 #include "core/powerSave.h"
 #include "core/ram_profile.h"
 #include "core/serial_commands/cli.h"
+#include "core/tls_mem.h"
 #include "core/utils.h"
 #include "current_year.h"
 #include "esp32-hal-psram.h"
@@ -476,6 +477,9 @@ void setup() {
         (unsigned)heap_caps_get_free_size(MALLOC_CAP_INTERNAL),
         (unsigned)heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL)
     );
+    // Let mbedTLS take its large buffers from PSRAM (see core/tls_mem.h). Without this, TLS
+    // connections fail on PSRAM boards whose internal DRAM is mostly taken by the radios.
+    if (tlsMemInit()) Serial.println("[TLS] mbedTLS large allocations use PSRAM");
     Serial.flush();
 
     RAM_LOG("setup-start");
